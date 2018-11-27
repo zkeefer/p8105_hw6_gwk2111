@@ -10,18 +10,19 @@ knitr::opts_chunk$set(echo = TRUE)
 
 library(tidyverse)
 library(dplyr)
+library(modelr)
 ```
 
 ```{r}
 homicide_df = read.csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv") %>% 
   janitor::clean_names() %>% 
   mutate(city_state = str_c(city, state, sep = ", ")) %>% 
+  filter(!city_state %in% c("Tulsa, AL", "Dallas, TX", "Phoenix, AZ", "Kansas City, MO")) %>% 
    mutate(resolved = as.numeric(disposition == "Closed by arrest"),
          victim_age = as.numeric(victim_age),
          ##include cases where victim race is unknown as "non-white"
          victim_race = ifelse(victim_race == "White", "white", "non-white"),
-         victim_race = fct_relevel(victim_race, "white")) %>% 
-  filter(city_state != "Tulsa, AL" & city_state != "Dallas, TX" & city_state != "Phoenix, AZ" & city_state != "Kansas City, MO")
+         victim_race = fct_relevel(victim_race, "white")) 
 ```
 
 ```{r}
@@ -43,23 +44,81 @@ fit_logistic %>%
 ```
 
 ```{r}
-glm_function = function(df) {
-  hom_logistic = glm(df$resolved ~ df$victim_age + df$victim_sex + df$victim_race, data = df, family = binomial())
-    
-    broom::tidy(hom_logistic) %>% 
-    mutate(OR = exp(estimate),
-           conf.low = exp(estimate - 1.96*std.error),
-           conf.high = exp(estimate + 1.96*std.error)) %>% 
-    select(term, OR, conf.low, conf.high) %>% 
-    filter(term == "victim_racenon-white")
-}
+hom_analysis = homicide_df %>% 
+  select(city_state, resolved, victim_race, victim_age, victim_sex) %>% 
+  group_by(city_state) %>% 
+  nest() %>% 
+  mutate(hom_glm = map(.x = data, ~ glm(resolved ~ victim_age + victim_race + victim_sex, data = .x, family = binomial())),
+         hom_glm = map(hom_glm, broom::tidy)) %>% 
+  select(-data) %>% 
+  unnest() %>% 
+  mutate(OR = exp(estimate),
+         conf.low = exp(estimate - 1.96*std.error),
+         conf.high = exp(estimate + 1.96*std.error)) %>% 
+  select(city_state, term, OR, conf.low, conf.high) %>% 
+  filter(term == "victim_racenon-white")
+
 ```
 
 ```{r}
-hom_df = homicide_df %>% 
-  nest(resolved, victim_age, victim_sex, victim_race) %>% 
-  mutate(hom_glm_df = map(data, glm_function)) %>% 
-  unnest()
+hom_analysis %>% 
+  mutate(city_state = forcats::fct_reorder(city_state, OR)) %>% 
+  ggplot(aes(x = city_state, y = OR)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  theme(axis.text.x = element_text(angle = 68, hjust = 1)) +
+  labs(x = "City",
+       y = "OR for solving homicides for non-whites compared to whites ")
 ```
 
+
+
+
+##Problem 2
+
+```{r}
+birthweight_df = read_csv("birthweight.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(babysex = as.factor(babysex),
+         frace = as.factor(frace),
+         mrace = as.factor(mrace))
+```
+
+  
+```{r}
+lin_model = birthweight_df %>% 
+  glm(bwt ~ ppbmi + smoken + momage, data = .)
+```
+
+```{r}
+birthweight_df %>% 
+  add_predictions(lin_model) %>% 
+  add_residuals(lin_model) %>% 
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point()
+```
+
+```{r}
+cv_df = 
+  crossv_mc(birthweight_df, 100)
+
+cv_df = 
+  cv_df %>% 
+  mutate(lin_mod = map(train, ~glm(bwt ~ ppbmi + smoken + momage, data = .)),
+         main_effects = map(train, ~glm(bwt ~ blength + gaweeks, data = .x)),
+         int_mod = map(train, ~glm(bwt ~ bhead + blength + babysex + bhead*blength + bhead*babysex + blength*babysex + bhead*blength*babysex, data = .x))) %>% 
+  mutate(rmse_lin    = map2_dbl(lin_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_main = map2_dbl(main_effects, test, ~rmse(model = .x, data = .y)),
+         rmse_int = map2_dbl(int_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  gather(key = model, value = rmse) %>% 
+  mutate(model = str_replace(model, "rmse_", ""),
+         model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
 
