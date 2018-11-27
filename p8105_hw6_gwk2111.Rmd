@@ -1,0 +1,65 @@
+---
+title: "p8105hw6_gwk2111"
+author: "Zach Keefer"
+date: "11/25/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+```
+
+```{r}
+homicide_df = read.csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(city_state = str_c(city, state, sep = ", ")) %>% 
+   mutate(resolved = as.numeric(disposition == "Closed by arrest"),
+         victim_age = as.numeric(victim_age),
+         ##include cases where victim race is unknown as "non-white"
+         victim_race = ifelse(victim_race == "White", "white", "non-white"),
+         victim_race = fct_relevel(victim_race, "white")) %>% 
+  filter(city_state != "Tulsa, AL" & city_state != "Dallas, TX" & city_state != "Phoenix, AZ" & city_state != "Kansas City, MO")
+```
+
+```{r}
+balt_homicides = filter(homicide_df, city_state == "Baltimore, MD")
+
+fit_logistic = 
+ balt_homicides %>% 
+  glm(resolved ~ victim_age + victim_sex + victim_race, data = ., family = binomial()) 
+```
+
+```{r}
+fit_logistic %>% 
+  broom::tidy() %>% 
+  mutate(OR = exp(estimate),
+         conf.low = exp(estimate - 1.96*std.error),
+         conf.high = exp(estimate + 1.96*std.error)) %>%
+  select(term, OR, conf.low, conf.high) %>% 
+  filter(term == "victim_racenon-white")
+```
+
+```{r}
+glm_function = function(df) {
+  hom_logistic = glm(df$resolved ~ df$victim_age + df$victim_sex + df$victim_race, data = df, family = binomial())
+    
+    broom::tidy(hom_logistic) %>% 
+    mutate(OR = exp(estimate),
+           conf.low = exp(estimate - 1.96*std.error),
+           conf.high = exp(estimate + 1.96*std.error)) %>% 
+    select(term, OR, conf.low, conf.high) %>% 
+    filter(term == "victim_racenon-white")
+}
+```
+
+```{r}
+hom_df = homicide_df %>% 
+  nest(resolved, victim_age, victim_sex, victim_race) %>% 
+  mutate(hom_glm_df = map(data, glm_function)) %>% 
+  unnest()
+```
+
+
