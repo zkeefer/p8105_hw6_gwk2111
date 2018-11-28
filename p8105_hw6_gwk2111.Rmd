@@ -13,17 +13,23 @@ library(dplyr)
 library(modelr)
 ```
 
+##Problem 1
+
 ```{r}
 homicide_df = read.csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv") %>% 
   janitor::clean_names() %>% 
   mutate(city_state = str_c(city, state, sep = ", ")) %>% 
+  ##eliminating states without race data
   filter(!city_state %in% c("Tulsa, AL", "Dallas, TX", "Phoenix, AZ", "Kansas City, MO")) %>% 
    mutate(resolved = as.numeric(disposition == "Closed by arrest"),
          victim_age = as.numeric(victim_age),
          ##include cases where victim race is unknown as "non-white"
          victim_race = ifelse(victim_race == "White", "white", "non-white"),
+         ##re-leveling race data so that "white" is the reference
          victim_race = fct_relevel(victim_race, "white")) 
 ```
+
+Running regression for Baltimore homicides only:
 
 ```{r}
 balt_homicides = filter(homicide_df, city_state == "Baltimore, MD")
@@ -32,10 +38,10 @@ fit_logistic =
  balt_homicides %>% 
   glm(resolved ~ victim_age + victim_sex + victim_race, data = ., family = binomial()) 
 ```
-
 ```{r}
 fit_logistic %>% 
   broom::tidy() %>% 
+  ##calculating OR and 95% CI
   mutate(OR = exp(estimate),
          conf.low = exp(estimate - 1.96*std.error),
          conf.high = exp(estimate + 1.96*std.error)) %>%
@@ -43,8 +49,11 @@ fit_logistic %>%
   filter(term == "victim_racenon-white")
 ```
 
+Running regression for all cities:
+
 ```{r}
 hom_analysis = homicide_df %>% 
+  ##selecting only the variables used in the regression
   select(city_state, resolved, victim_race, victim_age, victim_sex) %>% 
   group_by(city_state) %>% 
   nest() %>% 
@@ -60,18 +69,22 @@ hom_analysis = homicide_df %>%
 
 ```
 
+
+Plotting OR by City, ordered by estimated OR:
+
 ```{r}
 hom_analysis %>% 
   mutate(city_state = forcats::fct_reorder(city_state, OR)) %>% 
   ggplot(aes(x = city_state, y = OR)) +
   geom_point() +
   geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  ##Adjusting text to be more readable
   theme(axis.text.x = element_text(angle = 68, hjust = 1)) +
   labs(x = "City",
-       y = "OR for solving homicides for non-whites compared to whites ")
+       y = "OR non-whites compared to whites ")
 ```
 
-
+Based on the plot, a majority of the cities have an OR less than one, and so the odds of solving homicides for non-whites is less than the odds of solving homicides for whites in most cities.  There are three cities where the OR is greater than 1, Tampa, Durham, and Birmingham.  However, all three of these cities have large confidence intervals, and the ORs are not significant.    
 
 
 ##Problem 2
@@ -79,16 +92,27 @@ hom_analysis %>%
 ```{r}
 birthweight_df = read_csv("birthweight.csv") %>% 
   janitor::clean_names() %>% 
+  ##Changing dichotomous numeric variables into factor variables
   mutate(babysex = as.factor(babysex),
          frace = as.factor(frace),
          mrace = as.factor(mrace))
 ```
 
+```{r}
+  ##Running correlation coefficients to pick variables for model
+  cor(birthweight_df$bwt, birthweight_df$momage)
+  cor(birthweight_df$bwt, birthweight_df$delwt)
+```
+
+In order to build my model, I decided to look at maternal characteristics that affect birthweight.  Based on past research, I decided to look at weight at delivery as the exposure variable.  Above, I looked at the correlation between this variable and birthweight.  I also decided to add mother's age as a covariate in the model.  While neither correlation coefficient is particularly high, they were high compared to other coefficients I ran.  When constructing this model, I wanted to look at variables other than the ones in the models we will explore later in the problem.
   
 ```{r}
+##Creating my model
 lin_model = birthweight_df %>% 
-  glm(bwt ~ ppbmi + smoken + momage, data = .)
+  glm(bwt ~ delwt + momage, data = .)
 ```
+
+Plot of Residuals Vs. Predictors
 
 ```{r}
 birthweight_df %>% 
@@ -98,20 +122,22 @@ birthweight_df %>%
   geom_point()
 ```
 
+
+Comparing my model to the two other models given in the problem:
+
 ```{r}
 cv_df = 
   crossv_mc(birthweight_df, 100)
 
 cv_df = 
   cv_df %>% 
-  mutate(lin_mod = map(train, ~glm(bwt ~ ppbmi + smoken + momage, data = .)),
+  mutate(lin_mod = map(train, ~glm(bwt ~ delwt + momage, data = .)),
          main_effects = map(train, ~glm(bwt ~ blength + gaweeks, data = .x)),
          int_mod = map(train, ~glm(bwt ~ bhead + blength + babysex + bhead*blength + bhead*babysex + blength*babysex + bhead*blength*babysex, data = .x))) %>% 
   mutate(rmse_lin    = map2_dbl(lin_mod, test, ~rmse(model = .x, data = .y)),
          rmse_main = map2_dbl(main_effects, test, ~rmse(model = .x, data = .y)),
          rmse_int = map2_dbl(int_mod, test, ~rmse(model = .x, data = .y)))
 ```
-
 
 ```{r}
 cv_df %>% 
@@ -122,3 +148,4 @@ cv_df %>%
   ggplot(aes(x = model, y = rmse)) + geom_violin()
 ```
 
+Because it has the lowest RMSE, the model with the interaction terms is the best model.
